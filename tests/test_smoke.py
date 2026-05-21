@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import warnings
+from functools import partial
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -10,6 +12,10 @@ import pytest
 import pyalakazam as ak
 
 warnings.filterwarnings("ignore")
+
+# Change-O / quality example files shipped with the R alakazam package.
+_EXTDATA = Path("/scratch/users/steorra/env/CMAP/lib/R/library/"
+                "alakazam/extdata")
 
 
 # ----------------------------------------------------------------------
@@ -90,6 +96,43 @@ def test_sort_genes():
     assert s[0].startswith("IGHV1")
     s2 = ak.sortGenes(genes, method="position")
     assert isinstance(s2, list)
+
+
+def test_group_genes():
+    db = ak.load_example_db()
+    g = ak.groupGenes(db)
+    assert "vj_group" in g.columns
+    assert len(g) == len(db)
+    assert g["vj_group"].notna().all()
+    assert g["vj_group"].nunique() > 1
+    assert g["vj_group"].str.match(r"G\d+").all()
+
+
+def test_group_genes_junc_len():
+    db = ak.load_example_db()
+    g0 = ak.groupGenes(db)
+    g1 = ak.groupGenes(db, junc_len="junction_length")
+    # adding junction length can only split groups, never merge them
+    assert g1["vj_group"].nunique() >= g0["vj_group"].nunique()
+
+
+def test_group_genes_first_mode():
+    # ambiguous V calls collapse to a single group when first=False,
+    # since the union of gene calls chains them together
+    data = pd.DataFrame({
+        "sequence_id": ["s1", "s2", "s3"],
+        "v_call": ["IGHV1-2*01,IGHV3-11*01", "IGHV3-11*01", "IGHV1-2*01"],
+        "j_call": ["IGHJ4*02", "IGHJ4*02", "IGHJ4*02"],
+        "locus": ["IGH", "IGH", "IGH"],
+    })
+    g_union = ak.groupGenes(data, first=False)
+    assert g_union["vj_group"].nunique() == 1
+    g_first = ak.groupGenes(data, first=True)
+    # with first=True s1 keeps only IGHV1-2 -> groups with s3, not s2
+    assert g_first.set_index("sequence_id").loc["s1", "vj_group"] == \
+        g_first.set_index("sequence_id").loc["s3", "vj_group"]
+    assert g_first.set_index("sequence_id").loc["s1", "vj_group"] != \
+        g_first.set_index("sequence_id").loc["s2", "vj_group"]
 
 
 # ----------------------------------------------------------------------
@@ -387,3 +430,178 @@ def test_plotting_smoke():
 
     ax4 = ak.plotLineageTree(ak.load_example_trees()[22], label_field="c_call")
     assert ax4 is not None
+
+
+# ----------------------------------------------------------------------
+# Change-O database I/O
+# ----------------------------------------------------------------------
+def test_write_read_changeo_db_roundtrip(tmp_path):
+    df = pd.DataFrame({
+        "SEQUENCE_ID": ["s1", "s2", "s3"],
+        "V_CALL": ["IGHV1-2*01", "IGHV3-11*05", None],
+        "JUNCTION": ["tgtgcgaga", "tgtcaacag", "tgtgcgcgc"],
+        "DUPCOUNT": ["3", "1", "5"],
+    })
+    out = tmp_path / "db.tab"
+    ak.writeChangeoDb(df, out)
+    db = ak.readChangeoDb(out)
+    assert list(db.columns) == list(df.columns)
+    assert db.shape == df.shape
+    # sequence columns upper-cased by default
+    assert db["JUNCTION"].iloc[0] == "TGTGCGAGA"
+    db2 = ak.readChangeoDb(out, select=["SEQUENCE_ID", "V_CALL"])
+    assert list(db2.columns) == ["SEQUENCE_ID", "V_CALL"]
+    db3 = ak.readChangeoDb(out, drop=["DUPCOUNT"])
+    assert "DUPCOUNT" not in db3.columns
+    db4 = ak.readChangeoDb(out, seq_upper=False)
+    assert db4["JUNCTION"].iloc[0] == "tgtgcgaga"
+
+
+# ----------------------------------------------------------------------
+# Sequencing quality
+# ----------------------------------------------------------------------
+@pytest.mark.skipif(not (_EXTDATA / "example_quality.fastq").exists(),
+                    reason="alakazam extdata not available")
+def test_read_fastq_db():
+    qdb = ak.readChangeoDb(_EXTDATA / "example_quality.tsv")
+    fdb = ak.readFastqDb(qdb, _EXTDATA / "example_quality.fastq",
+                         style="both", quality_sequence=True)
+    for col in ("quality_alignment_num", "quality_alignment",
+                "quality", "quality_num"):
+        assert col in fdb.columns
+    fdb2 = ak.readFastqDb(qdb, _EXTDATA / "example_quality.fastq",
+                          style="num")
+    assert "quality_alignment_num" in fdb2.columns
+    assert "quality_alignment" not in fdb2.columns
+
+
+@pytest.mark.skipif(not (_EXTDATA / "example_quality.fastq").exists(),
+                    reason="alakazam extdata not available")
+def test_get_position_quality():
+    qdb = ak.readChangeoDb(_EXTDATA / "example_quality.tsv")
+    fdb = ak.readFastqDb(qdb, _EXTDATA / "example_quality.fastq",
+                         style="both", quality_sequence=True)
+    pq = ak.getPositionQuality(fdb)
+    assert set(pq.columns) == {"position", "quality_alignment_num",
+                               "sequence_id", "nt"}
+    assert pq["position"].iloc[0] == 1
+    assert len(pq) == len(fdb["sequence_alignment"].iloc[0])
+
+
+@pytest.mark.skipif(not (_EXTDATA / "example_quality.fastq").exists(),
+                    reason="alakazam extdata not available")
+def test_mask_positions_by_quality():
+    qdb = ak.readChangeoDb(_EXTDATA / "example_quality.tsv")
+    fdb = ak.readFastqDb(qdb, _EXTDATA / "example_quality.fastq",
+                         style="both", quality_sequence=True)
+    masked = ak.maskPositionsByQuality(fdb, min_quality=90)
+    assert "sequence_alignment_masked" in masked.columns
+    # high threshold -> at least one position masked to 'N'
+    assert "N" in masked["sequence_alignment_masked"].iloc[0]
+
+
+# ----------------------------------------------------------------------
+# Junction alignment
+# ----------------------------------------------------------------------
+def test_junction_alignment():
+    sdb = ak.load_single_db()
+    germline_db = {
+        "IGHV3-11*05": (
+            "CAGGTGCAGCTGGTGGAGTCTGGGGGA...GGCTTGGTCAAGCCTGGAGGG"
+            "TCCCTGAGACTCTCCTGTGCAGCCTCTGGATTCACCTTC............"
+            "AGTGACTACTACATGAGCTGGATCCGCCAGGCTCCAGGGAAGGGGCTGGAGT"
+            "GGGTTTCATACATTAGTAGTAGT......AGTAGTTACACAAACTACGCAGAC"
+            "TCTGTGAAG...GGCCGATTCACCATCTCCAGAGACAACGCCAAGAACTCACT"
+            "GTATCTGCAAATGAACAGCCTGAGAGCCGAGGACACGGCCGTGTATTACTGTG"
+            "CGAGAGA"),
+        "IGHD3-10*01": "GTATTACTATGGTTCGGGGAGTTATTATAAC",
+        "IGHJ5*02": "ACAACTGGTTCGACCCCTGGGGCCAGGGAACCCTGGTCACCGTCTCCTCAG",
+    }
+    db = ak.junctionAlignment(sdb, germline_db)
+    for col in ("e3v_length", "e5d_length", "e3d_length", "e5j_length",
+                "v_cdr3_length", "j_cdr3_length"):
+        assert col in db.columns
+    assert db["e5d_length"].iloc[0] == 5
+    assert db["v_cdr3_length"].iloc[0] == 7
+
+
+# ----------------------------------------------------------------------
+# IgPhyML
+# ----------------------------------------------------------------------
+def _write_igphyml(path):
+    with open(path, "w") as fh:
+        fh.write("CLONE\tNSEQ\tNSITE\tLHOOD\tTREE\n")
+        fh.write("REPERTOIRE\t0\t0\t-100.5\tigphyml --run\n")
+        fh.write("1\t3\t100\t-50.2\t(seq1:0.1,seq2:0.2,1_GERM:0.0);\n")
+        fh.write("2\t4\t100\t-60.1\t"
+                 "((seqA:0.3,seqB:0.1):0.05,2_GERM:0.0);\n")
+
+
+def test_read_igphyml(tmp_path):
+    f = tmp_path / "ig.tab"
+    _write_igphyml(f)
+    ig = ak.readIgphyml(f, id="donor1", format="graph")
+    assert "param" in ig and "command" in ig and "trees" in ig
+    assert ig["command"] == "igphyml --run"
+    assert set(ig["trees"]) == {"1", "2"}
+    assert all(isinstance(t, ak.LineageTree) for t in ig["trees"].values())
+    assert "id" in ig["param"].columns
+
+    ig_p = ak.readIgphyml(f, id="donor1", format="phylo")
+    assert all(hasattr(t, "tip_label") for t in ig_p["trees"].values())
+
+
+def test_combine_igphyml(tmp_path):
+    f = tmp_path / "ig.tab"
+    _write_igphyml(f)
+    ig1 = ak.readIgphyml(f, id="donor1", format="graph")
+    ig2 = ak.readIgphyml(f, id="donor2", format="graph")
+    wide = ak.combineIgphyml([ig1, ig2], format="wide")
+    assert len(wide) == 2
+    assert "id" in wide.columns
+    assert set(wide["id"]) == {"donor1", "donor2"}
+    long = ak.combineIgphyml([ig1, ig2], format="long")
+    assert {"id", "variable", "value"}.issubset(long.columns)
+
+
+# ----------------------------------------------------------------------
+# Test / subtree plots
+# ----------------------------------------------------------------------
+def test_test_plots_smoke():
+    import matplotlib
+    matplotlib.use("Agg")
+    db = ak.load_example_db()
+    div = ak.alphaDiversity(db, group="sample_id", min_q=0, max_q=4,
+                            step_q=1, nboot=20, seed=1)
+    assert ak.plotDiversityTest(div, q=2) is not None
+    assert ak.plotDiversityTest(div, q=2, annotate="depth",
+                                log_d=True) is not None
+
+    trees = ak.load_example_trees()
+    et = ak.testEdges(trees[:8], "c_call", nperm=10, seed=1)
+    assert ak.plotEdgeTest(et) is not None
+    assert ak.plotEdgeTest(et, style="cdf") is not None
+
+    mt = ak.testMRCA(trees[:8], "c_call", nperm=10, seed=1)
+    assert ak.plotMRCATest(mt) is not None
+    assert ak.plotMRCATest(mt, style="cdf") is not None
+
+    assert ak.plotSubtrees(trees[:8], "c_call", "size") is not None
+    assert ak.plotSubtrees(trees[:8], "c_call", "depth",
+                           style="violin") is not None
+
+    fig = ak.gridPlot(partial(ak.plotEdgeTest, et),
+                      partial(ak.plotMRCATest, mt), ncol=2)
+    assert fig is not None
+
+
+# ----------------------------------------------------------------------
+# Color constants
+# ----------------------------------------------------------------------
+def test_color_constants():
+    assert ak.DNA_COLORS["A"] == "#64F73F"
+    assert set(ak.DNA_COLORS) == {"A", "C", "G", "T"}
+    assert ak.IG_COLORS["IGHM"] == "#984EA3"
+    assert "IGHG" in ak.IG_COLORS
+    assert ak.TR_COLORS["TRB"] == "#F4CAE4"
+    assert set(ak.TR_COLORS) == {"TRA", "TRB", "TRD", "TRG"}

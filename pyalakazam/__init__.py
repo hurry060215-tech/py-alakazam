@@ -16,6 +16,8 @@ Gene annotation
 * :func:`countGenes` --- V(D)J gene-usage frequencies (copy/clone
   weighted, per-locus).
 * :func:`sortGenes` --- sort gene names by name or position.
+* :func:`groupGenes` --- group sequences by shared V/J(/junction-length)
+  gene assignments.
 
 Diversity & abundance
 ---------------------
@@ -49,10 +51,27 @@ Lineage reconstruction & topology
   :func:`testMRCA`.
 * :class:`ChangeoClone`, :class:`LineageTree`.
 
+Change-O database I/O
+---------------------
+* :func:`readChangeoDb`, :func:`writeChangeoDb` --- the Change-O
+  tab-delimited (AIRR-precursor) database format.
+
+Sequencing quality
+------------------
+* :func:`readFastqDb`, :func:`getPositionQuality`,
+  :func:`maskPositionsByQuality` --- per-position Phred-quality handling.
+
+Junction & IgPhyML
+------------------
+* :func:`junctionAlignment` --- junction-region alignment annotation.
+* :func:`readIgphyml`, :func:`combineIgphyml` --- IgPhyML output.
+
 Plotting
 --------
 * :func:`plotGeneUsage`, :func:`plotDiversityCurve`,
-  :func:`plotAbundanceCurve`, :func:`plotLineageTree`.
+  :func:`plotAbundanceCurve`, :func:`plotLineageTree`,
+  :func:`plotDiversityTest`, :func:`plotEdgeTest`, :func:`plotMRCATest`,
+  :func:`plotSubtrees`, :func:`gridPlot`.
 
 Example data
 ------------
@@ -63,21 +82,27 @@ from __future__ import annotations
 
 from .aminoacids import (aliphatic, aminoAcidProperties, bulk, charge,
                          countPatterns, gravy, isValidAASeq, polar)
-from .constants import (ABBREV_AA, BULKINESS_ZIMJ68, DNA_IUPAC,
-                        HYDROPATHY_KYTJ82, IMGT_REGIONS, IUPAC_AA, IUPAC_DNA,
-                        PK_EMBOSS, POLARITY_GRAR74)
+from .constants import (ABBREV_AA, BULKINESS_ZIMJ68, DNA_COLORS, DNA_IUPAC,
+                        HYDROPATHY_KYTJ82, IG_COLORS, IMGT_REGIONS, IUPAC_AA,
+                        IUPAC_DNA, PK_EMBOSS, POLARITY_GRAR74, TR_COLORS)
 from .core import checkColumns, stoufferMeta, translateStrings
 from .data import load_example_db, load_example_trees, load_single_db
 from .diversity import (AbundanceCurve, DiversityCurve, alphaDiversity,
                         calcCoverage, calcDiversity, countClones,
                         estimateAbundance, rarefyDiversity, testDiversity)
 from .gene import (countGenes, getAllele, getChain, getFamily, getGene,
-                   getLocus, getSegment, sortGenes)
+                   getLocus, getSegment, groupGenes, sortGenes)
 from .graph import LineageTree
+from .igphyml import combineIgphyml, readIgphyml
+from .io import readChangeoDb, writeChangeoDb
+from .junction import junctionAlignment
 from .lineage import (ChangeoClone, buildPhylipLineage, graphToPhylo,
                       makeChangeoClone, phyloToGraph)
-from .plotting import (plotAbundanceCurve, plotDiversityCurve, plotGeneUsage,
-                       plotLineageTree)
+from .plotting import (gridPlot, plotAbundanceCurve, plotDiversityCurve,
+                       plotDiversityTest, plotEdgeTest, plotGeneUsage,
+                       plotLineageTree, plotMRCATest, plotSubtrees)
+from .quality import (getPositionQuality, maskPositionsByQuality,
+                      readFastqDb)
 from .sequence import (collapseDuplicates, extractVRegion, getAAMatrix,
                        getDNAMatrix, maskSeqEnds, maskSeqGaps, nonsquareDist,
                        padSeqEnds, pairwiseDist, pairwiseEqual, seqDist,
@@ -86,12 +111,12 @@ from .topology import (EdgeTest, MRCATest, getMRCA, getPathLengths,
                        permuteLabels, summarizeSubtrees, tableEdges,
                        testEdges, testMRCA)
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     # gene annotation
     "getSegment", "getAllele", "getGene", "getFamily", "getLocus",
-    "getChain", "countGenes", "sortGenes",
+    "getChain", "countGenes", "sortGenes", "groupGenes",
     # diversity & abundance
     "calcDiversity", "calcCoverage", "alphaDiversity", "rarefyDiversity",
     "testDiversity", "estimateAbundance", "countClones",
@@ -109,9 +134,16 @@ __all__ = [
     "graphToPhylo", "phyloToGraph",
     "getPathLengths", "getMRCA", "tableEdges", "summarizeSubtrees",
     "permuteLabels", "testEdges", "testMRCA", "EdgeTest", "MRCATest",
+    # Change-O database I/O
+    "readChangeoDb", "writeChangeoDb",
+    # sequencing quality
+    "readFastqDb", "getPositionQuality", "maskPositionsByQuality",
+    # junction & IgPhyML
+    "junctionAlignment", "readIgphyml", "combineIgphyml",
     # plotting
     "plotGeneUsage", "plotDiversityCurve", "plotAbundanceCurve",
-    "plotLineageTree",
+    "plotLineageTree", "plotDiversityTest", "plotEdgeTest", "plotMRCATest",
+    "plotSubtrees", "gridPlot",
     # core utilities
     "translateStrings", "checkColumns", "stoufferMeta",
     # example data
@@ -119,4 +151,5 @@ __all__ = [
     # constants
     "IUPAC_DNA", "IUPAC_AA", "DNA_IUPAC", "ABBREV_AA", "IMGT_REGIONS",
     "HYDROPATHY_KYTJ82", "BULKINESS_ZIMJ68", "POLARITY_GRAR74", "PK_EMBOSS",
+    "DNA_COLORS", "IG_COLORS", "TR_COLORS",
 ]

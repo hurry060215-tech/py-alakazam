@@ -116,6 +116,40 @@ def test_count_genes_gene_mode_exact(r_ref, db):
     assert np.allclose(rk.loc[common], pk.loc[common])
 
 
+def _canonical_partition(labels):
+    """Map a label Series to its partition (set of frozensets of members).
+
+    Group label *names* differ between R and Python (component
+    enumeration order), so equality is tested on the partition itself.
+    """
+    parts = {}
+    for member, lab in labels.items():
+        parts.setdefault(lab, set()).add(member)
+    return frozenset(frozenset(m) for m in parts.values())
+
+
+def test_group_genes_partition_exact(r_ref, db):
+    """groupGenes must partition sequences identically to R."""
+    r = pd.read_csv(r_ref / "group_genes.tsv", sep="\t", dtype=str)
+    py = ak.groupGenes(db)
+    r_lab = r.set_index("sequence_id")["vj_group"].astype(str)
+    py_lab = py.set_index("sequence_id")["vj_group"].astype(str)
+    assert set(py_lab.index) == set(r_lab.index)
+    assert _canonical_partition(py_lab) == \
+        _canonical_partition(r_lab.loc[py_lab.index])
+
+
+def test_group_genes_junclen_partition_exact(r_ref, db):
+    """groupGenes with junc_len must partition identically to R."""
+    r = pd.read_csv(r_ref / "group_genes_junclen.tsv", sep="\t", dtype=str)
+    py = ak.groupGenes(db, junc_len="junction_length")
+    r_lab = r.set_index("sequence_id")["vj_group"].astype(str)
+    py_lab = py.set_index("sequence_id")["vj_group"].astype(str)
+    assert set(py_lab.index) == set(r_lab.index)
+    assert _canonical_partition(py_lab) == \
+        _canonical_partition(r_lab.loc[py_lab.index])
+
+
 def test_count_clones_exact(r_ref, db):
     r = pd.read_csv(r_ref / "count_clones.tsv", sep="\t")
     py = ak.countClones(db, groups="sample_id")
@@ -286,3 +320,107 @@ def test_calc_diversity_exact():
     # richness, exp(Shannon)@0.9999, inverse-Simpson
     assert abs(d[0] - 4.0) < 1e-9
     assert abs(d[2] - (1 / np.sum((p / p.sum()) ** 2))) < 1e-6
+
+
+# ======================================================================
+# Change-O database I/O --- bit-exact + round-trip
+# ======================================================================
+_EXTDATA = Path(CONDA_ENV) / "lib/R/library/alakazam/extdata"
+
+
+def test_read_changeo_db_exact(r_ref):
+    """readChangeoDb must reproduce R's parsed table bit-exactly."""
+    r = pd.read_csv(r_ref / "changeo_db.tsv", sep="\t", dtype=str,
+                    keep_default_na=False)
+    py = ak.readChangeoDb(_EXTDATA / "example_changeo.tab.gz")
+    assert list(py.columns) == list(r.columns)
+    assert py.shape == r.shape
+    py_s = py.fillna("NA").astype(str)
+    r_s = r.replace({"": "NA"}).astype(str)
+    assert py_s.equals(r_s.reset_index(drop=True))
+
+
+def test_write_changeo_db_roundtrip(r_ref, tmp_path):
+    """writeChangeoDb -> readChangeoDb round-trip is lossless and
+    matches R's own round-tripped output."""
+    py = ak.readChangeoDb(_EXTDATA / "example_changeo.tab.gz")
+    out = tmp_path / "rt.tab"
+    ak.writeChangeoDb(py, out)
+    py_rt = ak.readChangeoDb(out)
+    assert py_rt.fillna("NA").astype(str).equals(
+        py.fillna("NA").astype(str))
+    # versus R's round-trip
+    r = pd.read_csv(r_ref / "changeo_db_roundtrip.tsv", sep="\t", dtype=str,
+                    keep_default_na=False)
+    assert py_rt.shape == r.shape
+    assert py_rt.fillna("NA").astype(str).reset_index(drop=True).equals(
+        r.replace({"": "NA"}).astype(str))
+
+
+# ======================================================================
+# Sequencing quality --- bit-exact
+# ======================================================================
+def test_get_position_quality_exact(r_ref):
+    """getPositionQuality must reproduce R's per-position table."""
+    r = pd.read_csv(r_ref / "position_quality.tsv", sep="\t")
+    qdb = ak.readChangeoDb(_EXTDATA / "example_quality.tsv")
+    fdb = ak.readFastqDb(qdb, _EXTDATA / "example_quality.fastq",
+                         style="both", quality_sequence=True)
+    py = ak.getPositionQuality(fdb)
+    assert len(py) == len(r)
+    assert np.array_equal(py["position"].to_numpy(),
+                          r["position"].to_numpy())
+    rv = r["quality_alignment_num"].to_numpy(dtype=float)
+    pv = py["quality_alignment_num"].to_numpy(dtype=float)
+    mask = np.isfinite(rv) & np.isfinite(pv)
+    assert np.allclose(rv[mask], pv[mask], rtol=1e-6, atol=1e-9)
+    assert np.array_equal(np.isnan(rv), np.isnan(pv))
+    assert py["nt"].tolist() == r["nt"].tolist()
+    assert py["sequence_id"].astype(str).tolist() == \
+        r["sequence_id"].astype(str).tolist()
+
+
+def test_read_fastq_db_quality_exact(r_ref):
+    """readFastqDb quality_alignment_num must match R bit-exactly."""
+    r = pd.read_csv(r_ref / "fastq_quality.tsv", sep="\t", dtype=str)
+    qdb = ak.readChangeoDb(_EXTDATA / "example_quality.tsv")
+    fdb = ak.readFastqDb(qdb, _EXTDATA / "example_quality.fastq",
+                         style="both", quality_sequence=True)
+    r_vals = [np.nan if x in ("NA", "") else float(x)
+              for x in str(r["quality_alignment_num"].iloc[0]).split(",")]
+    py_vals = [np.nan if x in ("NA", "") else float(x)
+               for x in str(fdb["quality_alignment_num"].iloc[0]).split(",")]
+    assert len(r_vals) == len(py_vals)
+    for a, b in zip(r_vals, py_vals):
+        if np.isnan(a) or np.isnan(b):
+            assert np.isnan(a) and np.isnan(b)
+        else:
+            assert abs(a - b) < 1e-9
+
+
+# ======================================================================
+# Junction alignment --- bit-exact
+# ======================================================================
+def test_junction_alignment_exact(r_ref):
+    """junctionAlignment must reproduce R's deletion/CDR3 counts."""
+    r = pd.read_csv(r_ref / "junction_alignment.tsv", sep="\t")
+    sdb = ak.load_single_db()
+    # gapped IMGT germline references (as in the alakazam Rd example)
+    germline_db = {
+        "IGHV3-11*05": (
+            "CAGGTGCAGCTGGTGGAGTCTGGGGGA...GGCTTGGTCAAGCCTGGAGGG"
+            "TCCCTGAGACTCTCCTGTGCAGCCTCTGGATTCACCTTC............"
+            "AGTGACTACTACATGAGCTGGATCCGCCAGGCTCCAGGGAAGGGGCTGGAGT"
+            "GGGTTTCATACATTAGTAGTAGT......AGTAGTTACACAAACTACGCAGAC"
+            "TCTGTGAAG...GGCCGATTCACCATCTCCAGAGACAACGCCAAGAACTCACT"
+            "GTATCTGCAAATGAACAGCCTGAGAGCCGAGGACACGGCCGTGTATTACTGTG"
+            "CGAGAGA"),
+        "IGHD3-10*01": "GTATTACTATGGTTCGGGGAGTTATTATAAC",
+        "IGHJ5*02": "ACAACTGGTTCGACCCCTGGGGCCAGGGAACCCTGGTCACCGTCTCCTCAG",
+    }
+    py = ak.junctionAlignment(sdb, germline_db)
+    for col in ("e3v_length", "e5d_length", "e3d_length", "e5j_length",
+                "v_cdr3_length", "j_cdr3_length"):
+        rv = float(r[col].iloc[0])
+        pv = float(py[col].iloc[0])
+        assert abs(rv - pv) < 1e-9, f"{col}: R={rv} py={pv}"

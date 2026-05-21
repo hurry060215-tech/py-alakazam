@@ -34,6 +34,26 @@ DNA_IUPAC: dict[str, str] = {
 }
 
 # --------------------------------------------------------------------------
+# Default color palettes (alakazam R/Data.R)
+# --------------------------------------------------------------------------
+# Nucleotide colors, named by base.
+DNA_COLORS: dict[str, str] = {
+    "A": "#64F73F", "C": "#FFB340", "G": "#EB413C", "T": "#3C88EE",
+}
+
+# Immunoglobulin isotype/chain colors, named by C-region call.
+IG_COLORS: dict[str, str] = {
+    "IGHA": "#377EB8", "IGHD": "#FF7F00", "IGHE": "#E41A1C",
+    "IGHG": "#4DAF4A", "IGHM": "#984EA3", "IGHK": "#E5C494",
+    "IGHL": "#FFD92F",
+}
+
+# T-cell receptor chain colors, named by locus.
+TR_COLORS: dict[str, str] = {
+    "TRA": "#CBD5E8", "TRB": "#F4CAE4", "TRD": "#FDCDAC", "TRG": "#E6F5C9",
+}
+
+# --------------------------------------------------------------------------
 # Amino acid abbreviations (single letter -> three letter)
 # --------------------------------------------------------------------------
 ABBREV_AA: dict[str, str] = {

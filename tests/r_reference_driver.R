@@ -14,6 +14,7 @@ op <- function(f) file.path(out_dir, f)
 
 data(ExampleDb)
 data(ExampleTrees)
+data(SingleDb)
 
 # -- gene annotation -------------------------------------------------------
 gene_df <- data.frame(
@@ -35,6 +36,21 @@ write.table(as.data.frame(cg), op("count_genes.tsv"), sep = "\t",
 
 cg_gene <- countGenes(ExampleDb, gene = "v_call", mode = "gene")
 write.table(as.data.frame(cg_gene), op("count_genes_gene.tsv"), sep = "\t",
+            quote = FALSE, row.names = FALSE)
+
+# -- groupGenes ------------------------------------------------------------
+gg <- groupGenes(ExampleDb)
+write.table(data.frame(sequence_id = gg$sequence_id,
+                       vj_group    = gg$vj_group,
+                       stringsAsFactors = FALSE),
+            op("group_genes.tsv"), sep = "\t",
+            quote = FALSE, row.names = FALSE)
+
+gg_jl <- groupGenes(ExampleDb, junc_len = "junction_length")
+write.table(data.frame(sequence_id = gg_jl$sequence_id,
+                       vj_group    = gg_jl$vj_group,
+                       stringsAsFactors = FALSE),
+            op("group_genes_junclen.tsv"), sep = "\t",
             quote = FALSE, row.names = FALSE)
 
 # -- countClones -----------------------------------------------------------
@@ -101,6 +117,46 @@ write.table(st[, c("name", "outdegree", "size", "depth", "pathlength")],
 
 te <- tableEdges(g, "c_call", exclude = c("Germline", NA))
 write.table(as.data.frame(te), op("table_edges.tsv"), sep = "\t",
+            quote = FALSE, row.names = FALSE)
+
+# -- Change-O database I/O -------------------------------------------------
+ext <- system.file("extdata", package = "alakazam")
+changeo <- suppressWarnings(
+    readChangeoDb(file.path(ext, "example_changeo.tab.gz")))
+write.table(as.data.frame(changeo), op("changeo_db.tsv"), sep = "\t",
+            quote = FALSE, row.names = FALSE, na = "NA")
+# round-trip
+tmp_changeo <- op("changeo_roundtrip.tab")
+writeChangeoDb(changeo, tmp_changeo)
+changeo_rt <- suppressWarnings(readChangeoDb(tmp_changeo))
+write.table(as.data.frame(changeo_rt), op("changeo_db_roundtrip.tsv"),
+            sep = "\t", quote = FALSE, row.names = FALSE, na = "NA")
+
+# -- sequencing quality ---------------------------------------------------
+qdb <- suppressWarnings(readChangeoDb(file.path(ext, "example_quality.tsv")))
+fdb <- readFastqDb(qdb, file.path(ext, "example_quality.fastq"),
+                   style = "both", quality_sequence = TRUE)
+write.table(data.frame(quality_alignment_num = fdb$quality_alignment_num,
+                       stringsAsFactors = FALSE),
+            op("fastq_quality.tsv"), sep = "\t",
+            quote = FALSE, row.names = FALSE)
+pq <- getPositionQuality(fdb)
+write.table(as.data.frame(pq), op("position_quality.tsv"), sep = "\t",
+            quote = FALSE, row.names = FALSE, na = "NA")
+
+# -- junction alignment ---------------------------------------------------
+germline_db <- list(
+"IGHV3-11*05"=paste0("CAGGTGCAGCTGGTGGAGTCTGGGGGA...GGCTTGGTCAAGCCTGGAGGG",
+"TCCCTGAGACTCTCCTGTGCAGCCTCTGGATTCACCTTC............AGTGACTACTACATGAGCT",
+"GGATCCGCCAGGCTCCAGGGAAGGGGCTGGAGTGGGTTTCATACATTAGTAGTAGT......AGTAGTTA",
+"CACAAACTACGCAGACTCTGTGAAG...GGCCGATTCACCATCTCCAGAGACAACGCCAAGAACTCACTG",
+"TATCTGCAAATGAACAGCCTGAGAGCCGAGGACACGGCCGTGTATTACTGTGCGAGAGA"),
+"IGHD3-10*01"="GTATTACTATGGTTCGGGGAGTTATTATAAC",
+"IGHJ5*02"="ACAACTGGTTCGACCCCTGGGGCCAGGGAACCCTGGTCACCGTCTCCTCAG")
+ja <- junctionAlignment(SingleDb, germline_db)
+write.table(as.data.frame(ja[, c("sequence_id", "e3v_length", "e5d_length",
+            "e3d_length", "e5j_length", "v_cdr3_length", "j_cdr3_length")]),
+            op("junction_alignment.tsv"), sep = "\t",
             quote = FALSE, row.names = FALSE)
 
 cat("R reference driver complete.\n")

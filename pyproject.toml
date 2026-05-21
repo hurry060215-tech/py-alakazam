@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyalakazam"
-version = "0.1.0"
+version = "0.1.1"
 description = "Pure-Python port of the R/CRAN package alakazam -- the core package of the Immcantation framework for adaptive immune receptor repertoire (AIRR-seq) analysis."
 readme = "README.md"
 requires-python = ">=3.9"
